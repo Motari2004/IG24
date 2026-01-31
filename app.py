@@ -2,7 +2,6 @@ import os
 import sys
 
 # --- RENDER-SPECIFIC PATCHING ---
-# We only use eventlet on Render to keep local terminal logs instant.
 IS_PRODUCTION = os.environ.get('RENDER') is not None
 
 if IS_PRODUCTION:
@@ -23,8 +22,6 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'insta-secret-2026'
 
 # --- SOCKET SETUP ---
-# Local: 'threading' for instant UI updates.
-# Render: 'eventlet' for production concurrency.
 socket_mode = 'eventlet' if IS_PRODUCTION else 'threading'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=socket_mode)
 
@@ -40,7 +37,6 @@ class InstagramBot:
         self.username = user_data['username']
         self.password = user_data['password']
         
-        # Paths: Project folder for local, /tmp/ for Render's ephemeral disk
         self.cookie_file = f"cookies_{self.username}.json"
         if IS_PRODUCTION:
             self.cookie_file = f"/tmp/{self.cookie_file}"
@@ -53,7 +49,6 @@ class InstagramBot:
         self.socketio = socketio_instance
 
     def web_log(self, message):
-        """Prints to terminal instantly and sends to web UI."""
         print(f"[{self.username}] {message}", flush=True)
         self.socketio.emit('bot_update', {'msg': message, 'count': self.followed_today_count})
 
@@ -61,7 +56,6 @@ class InstagramBot:
         headless_mode = True if IS_PRODUCTION else config.HEADLESS_MODE
         self.web_log(f"🚀 STARTING: Browser (Headless={headless_mode})")
         
-        # Optimized launch args for Render RAM limits
         args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         if IS_PRODUCTION:
             args.extend(["--disable-quic", "--single-process"])
@@ -73,14 +67,14 @@ class InstagramBot:
         
         self.context = await self.browser.new_context(
             viewport={'width': 1280, 'height': 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
         
-        self.context.set_default_navigation_timeout(90000)
-        self.context.set_default_timeout(90000)
+        # --- INCREASED GLOBAL TIMEOUTS (2 Minutes) ---
+        self.context.set_default_navigation_timeout(120000)
+        self.context.set_default_timeout(120000)
         self.page = await self.context.new_page()
         
-        # Bandwidth Saver: Blocks images/fonts on Render only
         if IS_PRODUCTION:
             async def intercept(route):
                 if route.request.resource_type in ["media", "font"]: await route.abort()
@@ -88,15 +82,13 @@ class InstagramBot:
             await self.page.route("**/*", intercept)
 
         # --- SMART COOKIE MANAGEMENT ---
-        # 1. Check if Render has a SESSION_COOKIES environment variable
         env_cookies = os.environ.get('SESSION_COOKIES')
         if env_cookies:
             try:
                 await self.context.add_cookies(json.loads(env_cookies))
-                self.web_log("✅ Cookies loaded from Render Env.")
+                self.web_log("✅ Cookies injected from Render Env.")
             except Exception as e:
                 self.web_log(f"⚠️ Env Cookie Error: {str(e)[:30]}")
-        # 2. Otherwise check for the local file
         elif os.path.exists(self.cookie_file):
             try:
                 with open(self.cookie_file, 'r') as f:
@@ -108,20 +100,44 @@ class InstagramBot:
         return True
 
     async def check_if_logged_in(self):
-        markers = ['svg[aria-label="Home"]', 'img[alt*="profile picture"]', 'span:has-text("Search")']
-        for _ in range(15):
+        """Increased patience and markers to confirm active session."""
+        markers = [
+            'svg[aria-label="Home"]', 
+            'svg[aria-label="New post"]',
+            'img[alt*="profile picture"]', 
+            'span:has-text("Search")'
+        ]
+        
+        # Poll for 30 seconds
+        for i in range(15):
             for selector in markers:
                 try:
                     if await self.page.locator(selector).first.is_visible():
                         return True
                 except: continue
+            
+            # Popup Buster: Dismiss 'Save Info' or 'Notifications' during login check
+            popups = ["button:has-text('Not Now')", "button:has-text('Maybe Later')"]
+            for p in popups:
+                try:
+                    btn = self.page.locator(p).first
+                    if await btn.is_visible():
+                        await btn.click()
+                        self.web_log("🖱️ Dismissed login popup.")
+                except: pass
+                
             await asyncio.sleep(2)
         return False
 
     async def login(self):
-        self.web_log("NAVIGATING: Opening Instagram...")
+        self.web_log("📡 Navigating: Opening Instagram...")
         try:
-            await self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+            # wait_until="networkidle" is slower but more reliable for session loading
+            await self.page.goto("https://www.instagram.com/", wait_until="networkidle", timeout=90000)
+            
+            # Mandatory patience buffer for cookies to 'settle'
+            await asyncio.sleep(8)
+
             if await self.check_if_logged_in():
                 self.web_log("✨ Session verified.")
                 return True
@@ -132,14 +148,16 @@ class InstagramBot:
             await self.page.fill('input[name="username"]', self.username)
             await self.page.fill('input[name="password"]', self.password)
             await self.page.click('button[type="submit"]')
-            await asyncio.sleep(12)
+            
+            # Large sleep to allow MFA or redirected landing pages
+            await asyncio.sleep(15)
             
             success = await self.check_if_logged_in()
             if success:
                 cookies = await self.context.cookies()
                 with open(self.cookie_file, 'w') as f:
                     json.dump(cookies, f)
-                self.web_log("💾 Session saved to cookies file.")
+                self.web_log("💾 Session saved.")
             return success
         except Exception as e:
             self.web_log(f"❌ Login failed: {str(e)[:50]}")
@@ -148,7 +166,7 @@ class InstagramBot:
     async def search_hashtag(self, hashtag):
         self.web_log(f"🔎 SEARCHING: #{hashtag}")
         try:
-            await self.page.goto(f"https://www.instagram.com/explore/tags/{hashtag}/", wait_until="domcontentloaded")
+            await self.page.goto(f"https://www.instagram.com/explore/tags/{hashtag}/", wait_until="networkidle")
             await self.page.wait_for_selector('div._aagu', timeout=40000)
             await asyncio.sleep(5)
             await self.page.mouse.wheel(0, 1000) 
@@ -169,7 +187,6 @@ class InstagramBot:
             for attempt in range(1, 7):
                 self.web_log(f"⏳ Waiting for profile link... Attempt {attempt}/6")
                 try:
-                    # Target username in the post header
                     user_trigger = self.page.locator('header span._ap3a, header a').first
                     if await user_trigger.is_visible():
                         await user_trigger.click()
@@ -180,15 +197,14 @@ class InstagramBot:
 
             if not header_clicked: return
 
-            # Profile Page Logic
-            await self.page.wait_for_selector('a[href*="/followers/"]', timeout=30000)
+            # Increased profile loading time
             await asyncio.sleep(5)
+            await self.page.wait_for_selector('a[href*="/followers/"]', timeout=30000)
             
             await self.page.locator('a[href*="/followers/"]').first.click()
             await self.page.wait_for_selector('div[role="dialog"]', timeout=30000)
             await asyncio.sleep(5)
             
-            # Follow Loop
             while self.followed_today_count < target:
                 if self.session_batch_count >= 10:
                     self.web_log("⏳ Batch limit reached. Resting 60s...")
@@ -203,7 +219,7 @@ class InstagramBot:
                     self.followed_today_count += 1
                     self.session_batch_count += 1
                     self.web_log(f"✅ Followed ({self.followed_today_count}/{target})")
-                    await asyncio.sleep(random.uniform(4, 9))
+                    await asyncio.sleep(random.uniform(5, 12))
                 else:
                     await self.page.mouse.wheel(0, 800)
                     await asyncio.sleep(5)
