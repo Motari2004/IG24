@@ -199,7 +199,7 @@ class InstagramBot:
                 self.web_log("🏃 Starting follow sequence...")
 
                 # ────────────────────────────────────────────────
-                # DEBUG: Screenshot right after "Starting follow sequence..."
+                # DEBUG SCREENSHOT + EXPOSE VIA ENDPOINT
                 # ────────────────────────────────────────────────
                 try:
                     timestamp = int(asyncio.get_event_loop().time())
@@ -208,10 +208,10 @@ class InstagramBot:
                     await self.page.screenshot(path=screenshot_path, full_page=True)
                     self.web_log(f"📸 Debug screenshot saved: {screenshot_path}")
 
-                    # Optional: log clickable URL (if you have domain or Render URL)
-                    render_url = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'your-app.onrender.com')
-                    screenshot_url = f"https://{render_url}/debug-screenshot/{screenshot_filename}"
-                    self.web_log(f"🔗 View screenshot: {screenshot_url}")
+                    # Generate public URL
+                    render_domain = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'ig24.onrender.com')
+                    screenshot_url = f"https://{render_domain}/debug-screenshot/{screenshot_filename}"
+                    self.web_log(f"🔗 View screenshot in browser: {screenshot_url}")
                 except Exception as screenshot_err:
                     self.web_log(f"⚠️ Screenshot failed: {screenshot_err}", "warn")
 
@@ -289,12 +289,15 @@ class InstagramBot:
 def index():
     return render_template('index.html')
 
-# New endpoint to serve debug screenshots
+# Endpoint to serve debug screenshots
 @app.route('/debug-screenshot/<filename>')
 def serve_screenshot(filename):
     if not filename.startswith('follow_start_'):
-        abort(403)  # Forbidden - only allow our debug files
-    return send_from_directory('/tmp', filename)
+        abort(403)  # Security: only allow our debug screenshots
+    try:
+        return send_from_directory('/tmp', filename, as_attachment=False)
+    except Exception as e:
+        abort(404)  # File not found
 
 @socketio.on('start_bot')
 def handle_start_bot(data):
