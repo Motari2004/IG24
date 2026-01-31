@@ -140,18 +140,21 @@ class InstagramBot:
         try:
             await self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
             
-            # --- 20-ATTEMPT HOME VERIFICATION LOOP (RESTORED) ---
-            # Checks every 5 seconds for a total of 100 seconds
+            # --- 20-ATTEMPT HOME VERIFICATION LOOP (FIXED) ---
+            # Added .first to prevent "Strict Mode Violation" crashes
             for attempt in range(1, 21):
                 self.web_log(f"⏳ Verifying session (Attempt {attempt}/20)...")
                 await asyncio.sleep(5)
                 
-                # Check for indicators of a logged-in session
-                if await self.page.locator('svg[aria-label="Home"]').is_visible() or \
-                   await self.page.get_by_text("Search").is_visible() or \
-                   await self.page.get_by_text("Not Now").is_visible():
-                    self.web_log("✅ LOGIN SUCCESS: Session is valid.")
-                    return True
+                try:
+                    if await self.page.locator('svg[aria-label="Home"]').first.is_visible() or \
+                       await self.page.get_by_text("Search").first.is_visible() or \
+                       await self.page.get_by_text("Not Now").first.is_visible():
+                        self.web_log("✅ LOGIN SUCCESS: Session is valid.")
+                        return True
+                except Exception:
+                    # If selector fails (e.g. element detached), just continue loop
+                    continue
             
             # --- FALLBACK: MANUAL LOGIN ---
             self.web_log("⚠️ Cookies expired or missing. Attempting password login...")
@@ -177,7 +180,7 @@ class InstagramBot:
             return True
             
         except Exception as e:
-            self.web_log(f"❌ Login failed: {str(e)[:50]}", "warn")
+            self.web_log(f"❌ Login failed: {str(e)[:100]}", "warn")
             return False
 
     async def search_hashtag(self, hashtag):
