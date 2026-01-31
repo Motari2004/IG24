@@ -2,8 +2,7 @@ import os
 import sys
 
 # --- RENDER-SPECIFIC PATCHING ---
-# Only use eventlet if we are on Render. 
-# This is what restores the "instant" logs on your local machine.
+# We only use eventlet on Render to keep local terminal logs instant.
 IS_PRODUCTION = os.environ.get('RENDER') is not None
 
 if IS_PRODUCTION:
@@ -24,8 +23,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'insta-secret-2026'
 
 # --- SOCKET SETUP ---
-# Local: uses 'threading' (fast, instant logs)
-# Render: uses 'eventlet' (required for production)
+# Local: 'threading' for instant UI updates.
+# Render: 'eventlet' for production concurrency.
 socket_mode = 'eventlet' if IS_PRODUCTION else 'threading'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=socket_mode)
 
@@ -41,7 +40,7 @@ class InstagramBot:
         self.username = user_data['username']
         self.password = user_data['password']
         
-        # Local Logic: Save cookies to project folder. Production: Save to /tmp/
+        # Paths: Project folder for local, /tmp/ for Render's ephemeral disk
         self.cookie_file = f"cookies_{self.username}.json"
         if IS_PRODUCTION:
             self.cookie_file = f"/tmp/{self.cookie_file}"
@@ -54,17 +53,15 @@ class InstagramBot:
         self.socketio = socketio_instance
 
     def web_log(self, message):
-        """Prints to terminal and sends to web UI."""
-        # flush=True ensures the local console doesn't wait to show text
+        """Prints to terminal instantly and sends to web UI."""
         print(f"[{self.username}] {message}", flush=True)
         self.socketio.emit('bot_update', {'msg': message, 'count': self.followed_today_count})
 
     async def start(self, playwright):
-        # Local: uses config.py (False) | Render: Always True
         headless_mode = True if IS_PRODUCTION else config.HEADLESS_MODE
         self.web_log(f"🚀 STARTING: Browser (Headless={headless_mode})")
         
-        # Local arguments vs Render arguments
+        # Optimized launch args for Render RAM limits
         args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         if IS_PRODUCTION:
             args.extend(["--disable-quic", "--single-process"])
@@ -83,21 +80,30 @@ class InstagramBot:
         self.context.set_default_timeout(90000)
         self.page = await self.context.new_page()
         
-        # Only block media on Production to save bandwidth
+        # Bandwidth Saver: Blocks images/fonts on Render only
         if IS_PRODUCTION:
             async def intercept(route):
                 if route.request.resource_type in ["media", "font"]: await route.abort()
                 else: await route.continue_()
             await self.page.route("**/*", intercept)
 
-        # --- SESSION COOKIE MANAGEMENT ---
-        if os.path.exists(self.cookie_file):
+        # --- SMART COOKIE MANAGEMENT ---
+        # 1. Check if Render has a SESSION_COOKIES environment variable
+        env_cookies = os.environ.get('SESSION_COOKIES')
+        if env_cookies:
+            try:
+                await self.context.add_cookies(json.loads(env_cookies))
+                self.web_log("✅ Cookies loaded from Render Env.")
+            except Exception as e:
+                self.web_log(f"⚠️ Env Cookie Error: {str(e)[:30]}")
+        # 2. Otherwise check for the local file
+        elif os.path.exists(self.cookie_file):
             try:
                 with open(self.cookie_file, 'r') as f:
                     await self.context.add_cookies(json.load(f))
-                self.web_log("✅ Cookies loaded.")
+                self.web_log("✅ Cookies loaded from file.")
             except:
-                self.web_log("⚠️ Cookie Load Failed.")
+                self.web_log("⚠️ Cookie File Load Failed.")
 
         return True
 
@@ -133,9 +139,10 @@ class InstagramBot:
                 cookies = await self.context.cookies()
                 with open(self.cookie_file, 'w') as f:
                     json.dump(cookies, f)
+                self.web_log("💾 Session saved to cookies file.")
             return success
         except Exception as e:
-            self.web_log(f"❌ Login failed: {str(e)}")
+            self.web_log(f"❌ Login failed: {str(e)[:50]}")
         return False
 
     async def search_hashtag(self, hashtag):
@@ -162,7 +169,8 @@ class InstagramBot:
             for attempt in range(1, 7):
                 self.web_log(f"⏳ Waiting for profile link... Attempt {attempt}/6")
                 try:
-                    user_trigger = self.page.locator('span._ap3a._aaco._aacw._aacx._aad7._aade').last
+                    # Target username in the post header
+                    user_trigger = self.page.locator('header span._ap3a, header a').first
                     if await user_trigger.is_visible():
                         await user_trigger.click()
                         header_clicked = True
@@ -172,6 +180,7 @@ class InstagramBot:
 
             if not header_clicked: return
 
+            # Profile Page Logic
             await self.page.wait_for_selector('a[href*="/followers/"]', timeout=30000)
             await asyncio.sleep(5)
             
@@ -179,6 +188,7 @@ class InstagramBot:
             await self.page.wait_for_selector('div[role="dialog"]', timeout=30000)
             await asyncio.sleep(5)
             
+            # Follow Loop
             while self.followed_today_count < target:
                 if self.session_batch_count >= 10:
                     self.web_log("⏳ Batch limit reached. Resting 60s...")
@@ -205,7 +215,9 @@ class InstagramBot:
             self.web_log(f"⚠️ Skip: {str(e)[:40]}")
 
     async def close(self):
-        if self.browser: await self.browser.close()
+        try:
+            if self.browser: await self.browser.close()
+        except: pass
 
 # --- Worker Function ---
 def run_worker(target_count):
@@ -244,6 +256,5 @@ def handle_start(data):
     threading.Thread(target=run_worker, args=(target,), daemon=True).start()
 
 if __name__ == "__main__":
-    # Local defaults to 5000 | Render defaults to 10000
     port = int(os.environ.get("PORT", 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=False)
