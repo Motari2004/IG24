@@ -1,0 +1,5 @@
+flask
+flask-socketio
+playwright
+gunicorn
+eventlet>=0.33.3

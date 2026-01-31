@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>InstaBot Pro Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 40px; }
+        .container { background: white; width: 600px; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        .header { text-align: center; border-bottom: 1px solid #eee; margin-bottom: 20px; padding-bottom: 10px; }
+        .terminal { background: #282c34; color: #61dafb; padding: 15px; height: 350px; overflow-y: auto; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.5; margin-top: 20px; }
+        .input-group { display: flex; gap: 10px; margin: 20px 0; justify-content: center; }
+        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; width: 100px; text-align: center; }
+        button { background: #0095f6; color: white; border: none; padding: 10px 25px; border-radius: 4px; font-weight: bold; cursor: pointer; }
+        button:hover { background: #1877f2; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .status-bar { display: flex; justify-content: space-between; font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header"><h2>InstaBot Cloud v2.0</h2></div>
+        
+        <div class="status-bar">
+            <span>Status: <span id="status" style="color: #0095f6;">Idle</span></span>
+            <span>Followed: <span id="prog" style="color: #4caf50;">0</span></span>
+        </div>
+
+        <div class="input-group">
+            <input type="number" id="num" value="5">
+            <button id="btn" onclick="startBot()">Run Bot</button>
+        </div>
+
+        <div class="terminal" id="term">System Initialized. Waiting for command...<br></div>
+    </div>
+
+    <script>
+        var socket = io();
+        var term = document.getElementById('term');
+
+        function startBot() {
+            var val = document.getElementById('num').value;
+            socket.emit('start_request', {count: val});
+            document.getElementById('btn').disabled = true;
+            document.getElementById('status').innerText = "Running...";
+            term.innerHTML += "<span style='color:white'>[SYSTEM] Bot started for " + val + " follows.</span><br>";
+        }
+
+        socket.on('bot_update', function(data) {
+            term.innerHTML += "> " + data.msg + "<br>";
+            term.scrollTop = term.scrollHeight;
+            if(data.count !== undefined) document.getElementById('prog').innerText = data.count;
+            if(data.msg.includes("FINISH")) {
+                document.getElementById('btn').disabled = false;
+                document.getElementById('status').innerText = "Idle";
+            }
+        });
+    </script>
+</body>
+</html>

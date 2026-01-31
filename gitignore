@@ -1,0 +1,26 @@
+# Ignore specific user cookies
+cookies_hopefreymosingi.json/
+
+
+# Ignore python cache and environment files
+__pycache__/
+*.pyc
+venv/
+.env
+
+
+
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environments
+.venv/
+venv/
+env/
+
+# Ignore local session files and git
+.git/
+.env
+cookies_*.json
