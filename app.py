@@ -46,7 +46,6 @@ class InstagramBot:
         self.context = None
         self.page = None
 
-        # Cookie path
         self.cookie_file = f"/tmp/cookies_{self.username}.json" if IS_RENDER else f"cookies_{self.username}.json"
 
     def web_log(self, msg, level="info"):
@@ -199,7 +198,7 @@ class InstagramBot:
                 self.web_log("🏃 Starting follow sequence...")
 
                 # ────────────────────────────────────────────────
-                # DEBUG SCREENSHOT + EXPOSE VIA ENDPOINT
+                # DEBUG: Screenshot + public endpoint URL
                 # ────────────────────────────────────────────────
                 try:
                     timestamp = int(asyncio.get_event_loop().time())
@@ -208,10 +207,9 @@ class InstagramBot:
                     await self.page.screenshot(path=screenshot_path, full_page=True)
                     self.web_log(f"📸 Debug screenshot saved: {screenshot_path}")
 
-                    # Generate public URL
                     render_domain = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'ig24.onrender.com')
                     screenshot_url = f"https://{render_domain}/debug-screenshot/{screenshot_filename}"
-                    self.web_log(f"🔗 View screenshot in browser: {screenshot_url}")
+                    self.web_log(f"🔗 View screenshot: {screenshot_url}")
                 except Exception as screenshot_err:
                     self.web_log(f"⚠️ Screenshot failed: {screenshot_err}", "warn")
 
@@ -289,15 +287,17 @@ class InstagramBot:
 def index():
     return render_template('index.html')
 
-# Endpoint to serve debug screenshots
 @app.route('/debug-screenshot/<filename>')
 def serve_screenshot(filename):
     if not filename.startswith('follow_start_'):
-        abort(403)  # Security: only allow our debug screenshots
+        abort(403)  # Only allow our debug screenshots
     try:
-        return send_from_directory('/tmp', filename, as_attachment=False)
+        return send_from_directory('/tmp', filename)
+    except FileNotFoundError:
+        abort(404)
     except Exception as e:
-        abort(404)  # File not found
+        logging.error(f"Screenshot serve error: {e}")
+        abort(500)
 
 @socketio.on('start_bot')
 def handle_start_bot(data):
