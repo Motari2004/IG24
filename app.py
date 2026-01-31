@@ -6,7 +6,7 @@ import logging
 import json
 import threading
 from playwright.async_api import async_playwright
-from flask import Flask, render_template
+from flask import Flask, render_template, send_from_directory, abort
 from flask_socketio import SocketIO, emit
 
 # Render detection & early monkey patch
@@ -46,7 +46,7 @@ class InstagramBot:
         self.context = None
         self.page = None
 
-        # Cookie path: /tmp on Render (ephemeral), local file otherwise
+        # Cookie path
         self.cookie_file = f"/tmp/cookies_{self.username}.json" if IS_RENDER else f"cookies_{self.username}.json"
 
     def web_log(self, msg, level="info"):
@@ -75,7 +75,6 @@ class InstagramBot:
 
         cookies_loaded = False
 
-        # 1. Render: prefer SESSION_COOKIES env var
         if IS_RENDER:
             session_cookies_str = os.environ.get('SESSION_COOKIES')
             if session_cookies_str:
@@ -87,7 +86,6 @@ class InstagramBot:
                 except Exception as e:
                     self.web_log(f"⚠️ Failed to parse SESSION_COOKIES: {e}", "warn")
 
-        # 2. Fallback: local file
         if not cookies_loaded and os.path.exists(self.cookie_file):
             try:
                 with open(self.cookie_file, 'r') as f:
@@ -103,7 +101,6 @@ class InstagramBot:
 
         self.page = await self.context.new_page()
 
-        # Block images/media/fonts on Render for speed
         if IS_RENDER:
             await self.context.route("**/*", lambda route:
                 route.abort() if route.request.resource_type in ["image", "media", "font"]
@@ -124,7 +121,7 @@ class InstagramBot:
                     return True
 
             if not self.password:
-                self.web_log("❌ No password available for fallback login")
+                self.web_log("❌ No password for fallback login")
                 return False
 
             self.web_log("🔑 Session expired → logging in...")
@@ -147,17 +144,12 @@ class InstagramBot:
             self.web_log(f"❌ Login/session failed: {str(e)[:100]}", "warn")
             return False
 
-    # ────────────────────────────────────────────────
-    # YOUR EXACT ORIGINAL METHODS (unchanged)
-    # ────────────────────────────────────────────────
-
     async def search_hashtag(self, hashtag):
         self.web_log(f"🔎 Searching: #{hashtag}")
         try:
             await self.page.goto(f"https://www.instagram.com/explore/tags/{hashtag}/", wait_until="domcontentloaded")
             await self.page.wait_for_selector('div._aagu', timeout=30000)
             
-            # Scroll to load unique posts
             await self.page.mouse.wheel(0, 2000)
             await asyncio.sleep(3)
             
@@ -176,68 +168,79 @@ class InstagramBot:
             await self.page.goto(post_url, wait_until="domcontentloaded")
             await self.page.wait_for_selector('div._aagu', timeout=30000)
             await asyncio.sleep(random.uniform(2, 4))
-            # --- 1. OPEN PROFILE & WAIT FOR HEADER REQUESTS ---
+
             username_selector = 'span._ap3a._aaco._aacw._aacx._aad7._aade'
             user_trigger = self.page.locator(username_selector).last
+
             if await user_trigger.is_visible():
                 target_user = await user_trigger.inner_text()
                 await user_trigger.click()
-                
-                # --- 1. OPEN PROFILE & WAIT ---
+
                 try:
                     self.web_log(f"⏳ Waiting for {target_user} profile data...")
-                    # Wait for the URL to change to the profile
                     await self.page.wait_for_url(f"**/{target_user}/", timeout=10000)
-                    # Quick check for the header
                     await self.page.wait_for_selector('header', timeout=5000)
                     self.web_log(f"👤 Profile {target_user} loaded.")
                 except Exception:
                     self.web_log("⚠️ Profile header slow, attempting immediate click...")
-                
-                # --- 2. OPEN FOLLOWERS MODAL ---
+
                 try:
-                    # Use a more generic selector for the followers link if the exact href fails
                     followers_btn = self.page.locator(f'a[href="/{target_user}/followers/"]').first
-                    
                     await followers_btn.click(force=True)
-                    
-                    # wait for the dialog or the specific scroll area
+
                     self.web_log("⏳ Modal triggered, waiting for content to render...")
                     await self.page.wait_for_selector('div[role="dialog"], div._aano', timeout=10000)
-                    
-                    # Extra heartbeat to let the list items load
                     await asyncio.sleep(3)
                     self.web_log("👥 Followers list ready.")
                 except Exception as e:
                     self.web_log(f"🔒 Could not open followers: {str(e)[:30]}")
                     return
-                # --- 3. FOLLOW LOOP ---
+
                 self.web_log("🏃 Starting follow sequence...")
-                # Give Instagram time to actually render the first followers
+
+                # ────────────────────────────────────────────────
+                # DEBUG: Screenshot right after "Starting follow sequence..."
+                # ────────────────────────────────────────────────
+                try:
+                    timestamp = int(asyncio.get_event_loop().time())
+                    screenshot_filename = f"follow_start_{self.username}_{timestamp}.png"
+                    screenshot_path = f"/tmp/{screenshot_filename}"
+                    await self.page.screenshot(path=screenshot_path, full_page=True)
+                    self.web_log(f"📸 Debug screenshot saved: {screenshot_path}")
+
+                    # Optional: log clickable URL (if you have domain or Render URL)
+                    render_url = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'your-app.onrender.com')
+                    screenshot_url = f"https://{render_url}/debug-screenshot/{screenshot_filename}"
+                    self.web_log(f"🔗 View screenshot: {screenshot_url}")
+                except Exception as screenshot_err:
+                    self.web_log(f"⚠️ Screenshot failed: {screenshot_err}", "warn")
+
                 await asyncio.sleep(random.uniform(5.5, 9.5))
-                # More reliable selector: real <button> elements containing "Follow"
+
                 follow_selector = 'div[role="dialog"] button >> text="Follow"'
-                # Try to find the scrollable container (usually . _aano)
                 scroll_container = self.page.locator('div._aano').first
+
                 while self.followed_today_count < self.target_follows:
                     follow_buttons = self.page.locator(follow_selector)
                     count = await follow_buttons.count()
+
                     if count == 0:
-                        # No spam log — just scroll and wait silently
                         try:
                             await scroll_container.evaluate('el => el.scrollTop += 650')
                         except:
                             await self.page.mouse.wheel(0, 650)
                         await asyncio.sleep(random.uniform(4.0, 7.0))
                         continue
-                    # Process a small batch at a time (looks more natural)
+
                     processed_this_batch = 0
-                    max_per_batch = 4  # adjust if you want more/less aggressive
+                    max_per_batch = 4
+
                     for i in range(count):
                         if self.followed_today_count >= self.target_follows:
                             break
                         if processed_this_batch >= max_per_batch:
                             break
+
                         btn = follow_buttons.nth(i)
                         try:
                             await btn.scroll_into_view_if_needed(timeout=5000)
@@ -256,19 +259,17 @@ class InstagramBot:
                             ))
                             processed_this_batch += 1
                         except Exception:
-                            # Silent fail on single button — continue to next
                             continue
-                    # Scroll for next set of followers
+
                     try:
                         await scroll_container.evaluate('el => el.scrollTop += 850')
                     except:
                         await self.page.mouse.wheel(0, 850)
                     await asyncio.sleep(random.uniform(2.0, 4.5))
-                # Close the followers modal
+
                 try:
                     await self.page.keyboard.press("Escape")
                 except:
-                    # Fallback: try to click outside or close button
                     try:
                         await self.page.locator('div[role="dialog"] button[aria-label="Close"]').click(timeout=4000)
                     except:
@@ -282,11 +283,18 @@ class InstagramBot:
             self.web_log("🔒 Browser closed.")
 
 # ==========================================
-# FLASK + SOCKET.IO
+# FLASK ROUTES
 # ==========================================
 @app.route('/')
 def index():
     return render_template('index.html')
+
+# New endpoint to serve debug screenshots
+@app.route('/debug-screenshot/<filename>')
+def serve_screenshot(filename):
+    if not filename.startswith('follow_start_'):
+        abort(403)  # Forbidden - only allow our debug files
+    return send_from_directory('/tmp', filename)
 
 @socketio.on('start_bot')
 def handle_start_bot(data):
