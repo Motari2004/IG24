@@ -1,59 +1,155 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>InstaBot Pro Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InstaBot Controller</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 40px; }
-        .container { background: white; width: 600px; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-        .header { text-align: center; border-bottom: 1px solid #eee; margin-bottom: 20px; padding-bottom: 10px; }
-        .terminal { background: #282c34; color: #61dafb; padding: 15px; height: 350px; overflow-y: auto; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.5; margin-top: 20px; }
-        .input-group { display: flex; gap: 10px; margin: 20px 0; justify-content: center; }
-        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; width: 100px; text-align: center; }
-        button { background: #0095f6; color: white; border: none; padding: 10px 25px; border-radius: 4px; font-weight: bold; cursor: pointer; }
-        button:hover { background: #1877f2; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        .status-bar { display: flex; justify-content: space-between; font-weight: bold; color: #555; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #fafafa; 
+            display: flex; 
+            justify-content: center; 
+            padding-top: 50px; 
+            margin: 0; 
+        }
+        .container { 
+            background: white; 
+            width: 500px; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 25px rgba(0,0,0,0.1); 
+        }
+        h2 { 
+            text-align: center; 
+            color: #262626; 
+            margin-bottom: 20px; 
+        }
+        .input-group { 
+            margin-bottom: 15px; 
+        }
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: 600; 
+            color: #8e8e8e; 
+            font-size: 14px; 
+        }
+        input { 
+            width: 100%; 
+            padding: 12px; 
+            border: 1px solid #dbdbdb; 
+            border-radius: 6px; 
+            box-sizing: border-box; 
+            background: #fafafa; 
+            font-size: 14px; 
+        }
+        button { 
+            width: 100%; 
+            padding: 12px; 
+            background: #0095f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            margin-top: 10px; 
+            transition: 0.2s; 
+        }
+        button:hover { 
+            background: #0074cc; 
+        }
+        button:disabled { 
+            background: #b2dffc; 
+            cursor: not-allowed; 
+        }
+        
+        #logs { 
+            margin-top: 25px; 
+            background: #262626; 
+            color: #00ff9d; 
+            padding: 15px; 
+            height: 350px; 
+            overflow-y: auto; 
+            font-family: 'Courier New', monospace; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            line-height: 1.4; 
+            border: 1px solid #dbdbdb; 
+        }
+        .log-entry { 
+            margin-bottom: 4px; 
+            border-bottom: 1px solid #333; 
+            padding-bottom: 2px; 
+        }
+        .status-box { 
+            text-align: center; 
+            margin-bottom: 20px; 
+            font-weight: bold; 
+            color: #555; 
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header"><h2>InstaBot Cloud v2.0</h2></div>
-        
-        <div class="status-bar">
-            <span>Status: <span id="status" style="color: #0095f6;">Idle</span></span>
-            <span>Followed: <span id="prog" style="color: #4caf50;">0</span></span>
-        </div>
 
-        <div class="input-group">
-            <input type="number" id="num" value="5">
-            <button id="btn" onclick="startBot()">Run Bot</button>
-        </div>
+<div class="container">
+    <h2>🤖 InstaBot Controller</h2>
+    
+    <div class="status-box" id="status">Status: Idle</div>
 
-        <div class="terminal" id="term">System Initialized. Waiting for command...<br></div>
+    <div class="input-group">
+        <label>Target Number of Follows</label>
+        <input type="number" id="target_follows" value="20" min="1">
     </div>
 
-    <script>
-        var socket = io();
-        var term = document.getElementById('term');
+    <button id="startBtn" onclick="startBot()">🚀 Start Automation</button>
 
-        function startBot() {
-            var val = document.getElementById('num').value;
-            socket.emit('start_request', {count: val});
-            document.getElementById('btn').disabled = true;
-            document.getElementById('status').innerText = "Running...";
-            term.innerHTML += "<span style='color:white'>[SYSTEM] Bot started for " + val + " follows.</span><br>";
-        }
+    <div id="logs">
+        <div class="log-entry">Waiting for command...</div>
+    </div>
+</div>
 
-        socket.on('bot_update', function(data) {
-            term.innerHTML += "> " + data.msg + "<br>";
-            term.scrollTop = term.scrollHeight;
-            if(data.count !== undefined) document.getElementById('prog').innerText = data.count;
-            if(data.msg.includes("FINISH")) {
-                document.getElementById('btn').disabled = false;
-                document.getElementById('status').innerText = "Idle";
-            }
+<script>
+    const socket = io();
+    const logDiv = document.getElementById('logs');
+    const startBtn = document.getElementById('startBtn');
+    const statusDiv = document.getElementById('status');
+
+    function startBot() {
+        const target = document.getElementById('target_follows').value;
+        
+        // Disable button to prevent double clicks
+        startBtn.disabled = true;
+        startBtn.innerText = "⏳ Running...";
+        statusDiv.innerText = "Status: Running";
+        logDiv.innerHTML = '<div class="log-entry" style="color:yellow">⚡ Sending start command...</div>';
+        
+        // Send ONLY the target number to Python (Username/Pass handled by config.py)
+        socket.emit('start_bot', {
+            target_follows: parseInt(target)
         });
-    </script>
+    }
+
+    // Listen for logs from Python
+    socket.on('log_update', function(data) {
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        entry.innerText = data.msg;
+        logDiv.appendChild(entry);
+        
+        // Auto-scroll to bottom
+        logDiv.scrollTop = logDiv.scrollHeight;
+        
+        // Re-enable button if task is finished
+        if (data.msg.includes("Task Finished") || data.msg.includes("Browser closed")) {
+            startBtn.disabled = false;
+            startBtn.innerText = "🚀 Start Automation";
+            statusDiv.innerText = "Status: Completed";
+        }
+    });
+</script>
+
 </body>
 </html>
