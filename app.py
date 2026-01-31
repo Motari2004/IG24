@@ -5,7 +5,7 @@ import random
 import logging
 import json
 import threading
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from flask import Flask, render_template, send_from_directory, abort
 from flask_socketio import SocketIO, emit
 
@@ -100,6 +100,7 @@ class InstagramBot:
 
         self.page = await self.context.new_page()
 
+        # Light resource blocking (only media/font)
         if IS_RENDER:
             await self.context.route("**/*", lambda route:
                 route.abort() if route.request.resource_type in ["image", "media", "font"]
@@ -131,7 +132,7 @@ class InstagramBot:
             await self.page.fill('input[name="password"]', self.password)
             await self.page.click('button[type="submit"]')
 
-            await self.page.wait_for_selector('svg[aria-label="Home"]', timeout=40000)
+            await self.page.wait_for_selector('svg[aria-label="Home"]', timeout=60000)
 
             cookies = await self.context.cookies()
             with open(self.cookie_file, 'w') as f:
@@ -147,10 +148,11 @@ class InstagramBot:
         self.web_log(f"🔎 Searching: #{hashtag}")
         try:
             await self.page.goto(f"https://www.instagram.com/explore/tags/{hashtag}/", wait_until="domcontentloaded")
-            await self.page.wait_for_selector('div._aagu', timeout=30000)
+            await self.page.wait_for_selector('div._aagu, article', timeout=60000)
+            await self.page.wait_for_load_state('networkidle', timeout=30000)
             
             await self.page.mouse.wheel(0, 2000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)  # extra wait
             
             links = await self.page.locator('a:has(div._aagu)').evaluate_all(
                 "els => els.map(el => el.getAttribute('href'))"
@@ -158,15 +160,32 @@ class InstagramBot:
             unique_urls = [f"https://www.instagram.com{l}" for l in list(dict.fromkeys(links)) if "/p/" in l]
             return unique_urls[:12]
         except Exception as e:
-            self.web_log(f"⚠️ Search failed for #{hashtag}: {e}", "warn")
+            self.web_log(f"⚠️ Search failed for #{hashtag}: {str(e)[:80]}", "warn")
+            try:
+                timestamp = int(asyncio.get_event_loop().time())
+                screenshot_filename = f"search_timeout_{self.username}_{timestamp}.png"
+                await self.page.screenshot(path=f"/tmp/{screenshot_filename}", full_page=True)
+                render_domain = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'ig24.onrender.com')
+                self.web_log(f"📸 Search timeout screenshot: https://{render_domain}/debug-screenshot/{screenshot_filename}")
+            except:
+                pass
             return []
 
     async def process_post(self, post_url):
         self.web_log(f"📸 Processing: {post_url.split('/')[-2]}")
         try:
-            await self.page.goto(post_url, wait_until="domcontentloaded")
-            await self.page.wait_for_selector('div._aagu', timeout=30000)
-            await asyncio.sleep(random.uniform(2, 4))
+            # Retry page load on timeout
+            for retry in range(1, 3):
+                try:
+                    await self.page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
+                    break
+                except PlaywrightTimeoutError:
+                    self.web_log(f"Page.goto timeout (retry {retry}/2)...")
+                    await asyncio.sleep(5)
+
+            await self.page.wait_for_selector('div._aagu, article', timeout=60000)
+            await self.page.wait_for_load_state('networkidle', timeout=30000)
+            await asyncio.sleep(random.uniform(3, 6))
 
             username_selector = 'span._ap3a._aaco._aacw._aacx._aad7._aade'
             user_trigger = self.page.locator(username_selector).last
@@ -177,8 +196,8 @@ class InstagramBot:
 
                 try:
                     self.web_log(f"⏳ Waiting for {target_user} profile data...")
-                    await self.page.wait_for_url(f"**/{target_user}/", timeout=10000)
-                    await self.page.wait_for_selector('header', timeout=5000)
+                    await self.page.wait_for_url(f"**/{target_user}/", timeout=15000)
+                    await self.page.wait_for_selector('header', timeout=8000)
                     self.web_log(f"👤 Profile {target_user} loaded.")
                 except Exception:
                     self.web_log("⚠️ Profile header slow, attempting immediate click...")
@@ -188,17 +207,25 @@ class InstagramBot:
                     await followers_btn.click(force=True)
 
                     self.web_log("⏳ Modal triggered, waiting for content to render...")
-                    await self.page.wait_for_selector('div[role="dialog"], div._aano', timeout=10000)
-                    await asyncio.sleep(3)
+                    await self.page.wait_for_selector('div[role="dialog"], div._aano', timeout=20000)
+                    await asyncio.sleep(6)  # extra time for list load
                     self.web_log("👥 Followers list ready.")
                 except Exception as e:
-                    self.web_log(f"🔒 Could not open followers: {str(e)[:30]}")
+                    self.web_log(f"🔒 Could not open followers: {str(e)[:50]}")
+                    try:
+                        timestamp = int(asyncio.get_event_loop().time())
+                        screenshot_filename = f"modal_fail_{self.username}_{timestamp}.png"
+                        await self.page.screenshot(path=f"/tmp/{screenshot_filename}", full_page=True)
+                        render_domain = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'ig24.onrender.com')
+                        self.web_log(f"📸 Modal fail screenshot: https://{render_domain}/debug-screenshot/{screenshot_filename}")
+                    except:
+                        pass
                     return
 
                 self.web_log("🏃 Starting follow sequence...")
 
                 # ────────────────────────────────────────────────
-                # DEBUG: Screenshot + public endpoint URL
+                # DEBUG SCREENSHOT + PUBLIC URL
                 # ────────────────────────────────────────────────
                 try:
                     timestamp = int(asyncio.get_event_loop().time())
@@ -289,8 +316,8 @@ def index():
 
 @app.route('/debug-screenshot/<filename>')
 def serve_screenshot(filename):
-    if not filename.startswith('follow_start_'):
-        abort(403)  # Only allow our debug screenshots
+    if not filename.startswith('follow_start_') and not filename.startswith('modal_fail_'):
+        abort(403)
     try:
         return send_from_directory('/tmp', filename)
     except FileNotFoundError:
