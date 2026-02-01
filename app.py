@@ -45,7 +45,6 @@ class InstagramBot:
         self.browser = None
         self.context = None
         self.page = None
-
         self.cookie_file = f"/tmp/cookies_{self.username}.json" if IS_RENDER else f"cookies_{self.username}.json"
 
     def web_log(self, msg, level="info"):
@@ -100,12 +99,7 @@ class InstagramBot:
 
         self.page = await self.context.new_page()
 
-        # Light resource blocking ONLY on Render
-        if IS_RENDER:
-            await self.context.route("**/*", lambda route:
-                route.abort() if route.request.resource_type in ["image", "media", "font"]
-                else route.continue_())
-
+        # No resource blocking (as requested)
         return True
 
     async def login_or_check(self):
@@ -167,20 +161,10 @@ class InstagramBot:
             return unique_urls[:12]
         except Exception as e:
             self.web_log(f"SEARCH FAILED: Container div._aagu not found for #{hashtag}. {e}")
-            # Screenshot on Render only
-            if IS_RENDER:
-                try:
-                    timestamp = int(asyncio.get_event_loop().time())
-                    screenshot_filename = f"search_timeout_{self.username}_{timestamp}.png"
-                    await self.page.screenshot(path=f"/tmp/{screenshot_filename}", full_page=True)
-                    render_domain = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'ig24.onrender.com')
-                    self.web_log(f"📸 Search timeout screenshot: https://{render_domain}/debug-screenshot/{screenshot_filename}")
-                except:
-                    pass
             return []
 
     async def process_post(self, post_url):
-        self.web_log(f"OPENING POST: {post_url.split('/')[-2]}")
+        self.web_log(f"OPENING POST: {post_url}")
         try:
             await self.page.goto(post_url, wait_until="commit", timeout=70000)
             
@@ -192,9 +176,11 @@ class InstagramBot:
 
             username_selector = 'span._ap3a._aaco._aacw._aacx._aad7._aade'
             user_trigger = self.page.locator(username_selector).last
+
             if await user_trigger.is_visible():
                 target_user = await user_trigger.inner_text()
                 await user_trigger.click()
+
                 try:
                     self.web_log(f"⏳ Waiting for {target_user} profile data...")
                     await self.page.wait_for_url(f"**/{target_user}/", timeout=10000)
@@ -202,10 +188,11 @@ class InstagramBot:
                     self.web_log(f"👤 Profile {target_user} loaded.")
                 except Exception:
                     self.web_log("⚠️ Profile header slow, attempting immediate click...")
-                
+
                 try:
                     followers_btn = self.page.locator(f'a[href="/{target_user}/followers/"]').first
                     await followers_btn.click(force=True)
+
                     self.web_log("⏳ Modal triggered, waiting for content to render...")
                     await self.page.wait_for_selector('div[role="dialog"], div._aano', timeout=10000)
                     await asyncio.sleep(3)
@@ -213,14 +200,18 @@ class InstagramBot:
                 except Exception as e:
                     self.web_log(f"🔒 Could not open followers: {str(e)[:30]}")
                     return
-                
+
                 self.web_log("🏃 Starting follow sequence...")
+
                 await asyncio.sleep(random.uniform(5.5, 9.5))
+
                 follow_selector = 'div[role="dialog"] button >> text="Follow"'
                 scroll_container = self.page.locator('div._aano').first
+
                 while self.followed_today_count < self.target_follows:
                     follow_buttons = self.page.locator(follow_selector)
                     count = await follow_buttons.count()
+
                     if count == 0:
                         try:
                             await scroll_container.evaluate('el => el.scrollTop += 650')
@@ -228,13 +219,16 @@ class InstagramBot:
                             await self.page.mouse.wheel(0, 650)
                         await asyncio.sleep(random.uniform(4.0, 7.0))
                         continue
+
                     processed_this_batch = 0
                     max_per_batch = 4
+
                     for i in range(count):
                         if self.followed_today_count >= self.target_follows:
                             break
                         if processed_this_batch >= max_per_batch:
                             break
+
                         btn = follow_buttons.nth(i)
                         try:
                             await btn.scroll_into_view_if_needed(timeout=5000)
@@ -254,11 +248,13 @@ class InstagramBot:
                             processed_this_batch += 1
                         except Exception:
                             continue
+
                     try:
                         await scroll_container.evaluate('el => el.scrollTop += 850')
                     except:
                         await self.page.mouse.wheel(0, 850)
                     await asyncio.sleep(random.uniform(2.0, 4.5))
+
                 try:
                     await self.page.keyboard.press("Escape")
                 except:
