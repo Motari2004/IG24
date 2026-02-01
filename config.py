@@ -16,5 +16,3 @@ MAX_FOLLOW_DELAY = 5     # Seconds
 LOG_LEVEL = "INFO"
 
 
-HEADLESS_MODE = False  # set False to watch browser
-LOG_FILE = "bot.log"  # or any path

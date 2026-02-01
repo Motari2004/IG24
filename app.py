@@ -100,7 +100,7 @@ class InstagramBot:
 
         self.page = await self.context.new_page()
 
-        # Light resource blocking ONLY on Render (images/media/font)
+        # Light resource blocking ONLY on Render
         if IS_RENDER:
             await self.context.route("**/*", lambda route:
                 route.abort() if route.request.resource_type in ["image", "media", "font"]
@@ -144,9 +144,6 @@ class InstagramBot:
             self.web_log(f"❌ Login/session failed: {str(e)[:100]}", "warn")
             return False
 
-    # ────────────────────────────────────────────────
-    # YOUR NEW LOCAL-FRIENDLY SEARCH METHOD
-    # ────────────────────────────────────────────────
     async def search_hashtag(self, hashtag):
         self.web_log(f"🔎 Searching: #{hashtag}")
         try:
@@ -170,7 +167,7 @@ class InstagramBot:
             return unique_urls[:12]
         except Exception as e:
             self.web_log(f"SEARCH FAILED: Container div._aagu not found for #{hashtag}. {e}")
-            # Screenshot on Render only (no URL in local logs)
+            # Screenshot on Render only
             if IS_RENDER:
                 try:
                     timestamp = int(asyncio.get_event_loop().time())
@@ -182,11 +179,8 @@ class InstagramBot:
                     pass
             return []
 
-    # ────────────────────────────────────────────────
-    # YOUR NEW PROCESS_POST METHOD (unchanged from your last paste)
-    # ────────────────────────────────────────────────
     async def process_post(self, post_url):
-        self.web_log(f"OPENING POST: {post_url}")
+        self.web_log(f"OPENING POST: {post_url.split('/')[-2]}")
         try:
             await self.page.goto(post_url, wait_until="commit", timeout=70000)
             
